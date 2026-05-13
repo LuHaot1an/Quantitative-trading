@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .config import APP_PASSWORD, FRONTEND_ORIGINS
 from .models import BacktestRequest, LiveRebalanceRequest, ManualRebalanceRequest, StrategyRequest
-from .strategy import rebalance_from_positions, run_backtest_summary, run_strategy
+from .strategy import FAST_UNIVERSE, normalize_t212_ticker, rebalance_from_positions, run_backtest_summary, run_strategy
 from .trading212 import Trading212Client, Trading212Error
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s %(message)s")
@@ -43,6 +43,8 @@ def api_strategy_run(request: StrategyRequest) -> dict:
         mode=request.mode,
         weighting=request.weighting,
         refresh=request.refresh,
+        universe=FAST_UNIVERSE,
+        fast=True,
     )
 
 
@@ -88,6 +90,8 @@ def api_rebalance_live(request: LiveRebalanceRequest) -> dict:
         mode=request.mode,
         weighting=request.weighting,
         refresh=request.refresh,
+        universe=portfolio_universe(positions),
+        fast=True,
     )
     currency = (account.get("info") or {}).get("currencyCode") or "GBP"
     return {
@@ -110,6 +114,8 @@ def api_rebalance_manual(request: ManualRebalanceRequest) -> dict:
         mode=request.mode,
         weighting=request.weighting,
         refresh=request.refresh,
+        universe=portfolio_universe(positions),
+        fast=True,
     )
     return {
         "strategy": strategy,
@@ -125,6 +131,11 @@ def portfolio_target_budget(positions: list[dict], account: dict | None, additio
         raw_cash = account.get("cash") or {}
         cash = float(raw_cash.get("free") or raw_cash.get("available") or raw_cash.get("cash") or 0)
     return current_value + cash + additional_cash_gbp
+
+
+def portfolio_universe(positions: list[dict]) -> list[str]:
+    current = [normalize_t212_ticker(str(position.get("ticker", ""))) for position in positions]
+    return sorted(set(FAST_UNIVERSE) | {ticker for ticker in current if ticker})
 
 
 def position_value(position: dict) -> float:

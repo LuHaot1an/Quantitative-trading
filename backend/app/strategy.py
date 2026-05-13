@@ -25,6 +25,18 @@ MODE_DESC = {
     "aggressive": "短期 1 个月持有, 3 月动量 + 风险/估值惩罚, 限制单股集中度",
 }
 
+FAST_UNIVERSE = sorted(
+    {
+        "AAPL", "ABBV", "ABT", "ADBE", "AMD", "AMGN", "AMZN", "AVGO", "AXP", "BA",
+        "BAC", "BKNG", "BLK", "BRK-B", "CAT", "COST", "CRM", "CSCO", "CVX", "DE",
+        "DIS", "FIX", "GE", "GOOGL", "GS", "HD", "IBM", "INTC", "INTU", "IRM",
+        "ISRG", "JNJ", "JPM", "KO", "LIN", "LLY", "LMT", "MA", "MCD", "META",
+        "MRK", "MS", "MSFT", "NFLX", "NKE", "NOW", "NVDA", "ORCL", "PEP", "PLTR",
+        "QCOM", "RTX", "SBUX", "SNDK", "T", "TSLA", "TXN", "UNH", "V", "VRT",
+        "WMT", "XOM",
+    }
+)
+
 WEIGHT_DESC = {
     "equal": "等权: 每只股票买差不多金额，最容易理解",
     "inv_vol": "反向波动: 波动小的股票多买一点，降低组合起伏",
@@ -274,13 +286,19 @@ def run_strategy(
     mode: str = "aggressive",
     weighting: str | None = None,
     refresh: bool = False,
+    universe: list[str] | None = None,
+    fast: bool = False,
 ) -> dict[str, Any]:
     weighting = default_weighting(mode, weighting)
-    tickers, sector_map = fetch_sp500(refresh=refresh)
+    if universe is None:
+        tickers, sector_map = fetch_sp500(refresh=refresh)
+    else:
+        tickers = sorted({normalize_t212_ticker(ticker) for ticker in universe if ticker})
+        sector_map = {ticker: "High Liquidity US Stocks" for ticker in tickers}
     price = load_prices(tickers, refresh=refresh)
     price_score = price_factor_score(price, mode=mode)
     candidates = price_score.head(50).index.tolist()
-    fund = load_fundamentals(candidates, sector_map, refresh=refresh)
+    fund = make_fast_fundamentals(candidates, sector_map) if fast else load_fundamentals(candidates, sector_map, refresh=refresh)
     selected, final_score = select_with_fundamentals(price_score, fund, n=n, mode=mode)
     weights = compute_weights(selected, price, method=weighting)
 
@@ -327,8 +345,24 @@ def run_strategy(
             "历史回测不代表未来收益，尤其是 aggressive 动量策略。",
             "这个系统只提供调仓辅助，不保证盈利，也不会自动下单。",
             "单只股票可能快速下跌，建议只使用能承受亏损的资金。",
+            "网页部署版使用快速候选池，优先保证实盘调仓可用；不是全市场扫描。",
         ],
     }
+
+
+def make_fast_fundamentals(tickers: list[str], sector_map: dict[str, str]) -> pd.DataFrame:
+    rows = [
+        {
+            "Ticker": ticker,
+            "PE": 20.0,
+            "PB": 5.0,
+            "ROE": 0.15,
+            "MarketCap": 1e12,
+            "Sector": sector_map.get(ticker, "High Liquidity US Stocks"),
+        }
+        for ticker in tickers
+    ]
+    return pd.DataFrame(rows).set_index("Ticker")
 
 
 def run_backtest_summary(n: int, mode: str = "aggressive", weighting: str | None = None) -> dict[str, Any]:
@@ -504,4 +538,3 @@ def _position_value(raw: dict[str, Any]) -> float:
 def _explain_pick(mode: str, sector: Any, weight: float) -> str:
     style = "短期动量更强" if mode == "aggressive" else "长期质量和估值更均衡"
     return f"{style}，属于 {sector} 行业；目标仓位约 {weight:.1%}。"
-
