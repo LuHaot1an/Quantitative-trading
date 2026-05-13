@@ -55,7 +55,9 @@ async function api(path, options = {}) {
   });
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
-    throw new Error(data.detail || "请求失败");
+    const error = new Error(data.detail || "请求失败");
+    error.status = response.status;
+    throw error;
   }
   return data;
 }
@@ -74,12 +76,20 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [loadingLabel, setLoadingLabel] = useState("");
   const [error, setError] = useState("");
+  const [precompute, setPrecompute] = useState(null);
 
   useEffect(() => {
     if (appPassword) {
       refreshBrokerStatus();
+      refreshPrecomputeStatus();
     }
   }, [appPassword]);
+
+  useEffect(() => {
+    if (!appPassword || !precompute?.running) return undefined;
+    const timer = window.setInterval(refreshPrecomputeStatus, 10000);
+    return () => window.clearInterval(timer);
+  }, [appPassword, precompute?.running]);
 
   function unlockApp(event) {
     event.preventDefault();
@@ -92,6 +102,28 @@ function App() {
       setBrokerStatus(await api("/api/broker/trading212/status"));
     } catch (err) {
       setBrokerStatus({ configured: false, message: err.message, can_trade: false });
+    }
+  }
+
+  async function refreshPrecomputeStatus() {
+    try {
+      setPrecompute(await api("/api/precompute/status"));
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
+  async function startPrecompute() {
+    setLoading(true);
+    setLoadingLabel("已启动后台完整 S&P 500 策略计算。Render 免费机器可能需要几分钟。");
+    setError("");
+    try {
+      setPrecompute(await api("/api/precompute/run", { method: "POST", body: "{}" }));
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+      setLoadingLabel("");
     }
   }
 
@@ -114,10 +146,15 @@ function App() {
       }
       setBacktest(null);
     } catch (err) {
-      setError(err.message);
+      if (err.status === 202) {
+        setLoadingLabel("完整 S&P 500 策略正在后台计算。请等状态变为可用后再点重新计算。");
+        await refreshPrecomputeStatus();
+      } else {
+        setError(err.message);
+      }
     } finally {
       setLoading(false);
-      setLoadingLabel("");
+      if (!precompute?.running) setLoadingLabel("");
     }
   }
 
@@ -257,9 +294,13 @@ function App() {
           <button className="primary" onClick={() => runDashboard()} disabled={loading}>
             <RefreshCw size={17} /> 重新计算策略
           </button>
+          <button className="secondary" onClick={startPrecompute} disabled={loading || precompute?.running}>
+            <Database size={17} /> 后台预计算完整策略
+          </button>
           <button className="secondary" onClick={syncLivePortfolio} disabled={loading || !brokerStatus?.configured}>
             <Wallet size={17} /> 同步 Trading 212 持仓
           </button>
+          <p className="muted">{precomputeStatusText(precompute)}</p>
           <p className="muted">{brokerStatus?.message || "正在检测 Trading 212 配置。"}</p>
         </aside>
 
@@ -520,6 +561,14 @@ function actionText(action) {
   if (action === "buy") return "买入";
   if (action === "sell") return "卖出";
   return "保持";
+}
+
+function precomputeStatusText(precompute) {
+  if (!precompute) return "完整策略缓存状态未知。";
+  if (precompute.running) return "完整 S&P 500 策略正在后台计算。";
+  if (precompute.has_cache) return `完整策略缓存可用，约 ${Math.round((precompute.cache_age_seconds || 0) / 60)} 分钟前更新。`;
+  if (precompute.last_error) return `后台策略计算失败：${precompute.last_error}`;
+  return "还没有完整策略缓存，请先点后台预计算。";
 }
 
 createRoot(document.getElementById("root")).render(<App />);

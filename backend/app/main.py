@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .config import APP_PASSWORD, FRONTEND_ORIGINS
 from .models import BacktestRequest, LiveRebalanceRequest, ManualRebalanceRequest, StrategyRequest
+from .precompute import get_cached_strategy, get_precompute_status, scale_cached_strategy, start_precompute, start_scheduler
 from .strategy import FAST_UNIVERSE, normalize_t212_ticker, rebalance_from_positions, run_backtest_summary, run_strategy
 from .trading212 import Trading212Client, Trading212Error
 
@@ -23,6 +24,11 @@ app.add_middleware(
 )
 
 
+@app.on_event("startup")
+def startup_precompute() -> None:
+    start_scheduler()
+
+
 def require_app_password(x_app_password: str | None = Header(default=None)) -> None:
     if APP_PASSWORD and x_app_password != APP_PASSWORD:
         raise HTTPException(status_code=401, detail="访问密码错误。")
@@ -33,19 +39,25 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
+@app.get("/api/precompute/status", dependencies=[Depends(require_app_password)])
+def api_precompute_status() -> dict:
+    return get_precompute_status()
+
+
+@app.post("/api/precompute/run", dependencies=[Depends(require_app_password)])
+def api_precompute_run() -> dict:
+    return start_precompute(force=True)
+
+
 @app.post("/api/strategy/run", dependencies=[Depends(require_app_password)])
 def api_strategy_run(request: StrategyRequest) -> dict:
     if request.budget_gbp <= 0:
-        raise HTTPException(status_code=400, detail="没有同步持仓时，追加资金必须大于 0 才能单独计算策略。")
-    return run_strategy(
-        budget_gbp=request.budget_gbp,
-        n=request.n,
-        mode=request.mode,
-        weighting=request.weighting,
-        refresh=request.refresh,
-        universe=FAST_UNIVERSE,
-        fast=True,
-    )
+        raise HTTPException(status_code=400, detail="没有同步持仓时，追加资金必须大于 0。")
+    cached = get_cached_strategy()
+    if cached is None:
+        start_precompute(force=False)
+        raise HTTPException(status_code=202, detail="完整 S&P 500 策略正在后台计算，请稍后刷新状态。")
+    return scale_cached_strategy(cached, request.budget_gbp)
 
 
 @app.post("/api/backtest", dependencies=[Depends(require_app_password)])
@@ -84,15 +96,11 @@ def api_rebalance_live(request: LiveRebalanceRequest) -> dict:
         raise HTTPException(status_code=exc.status_code or 502, detail=str(exc)) from exc
 
     target_budget = portfolio_target_budget(positions, account, request.budget_gbp)
-    strategy = run_strategy(
-        budget_gbp=target_budget,
-        n=request.n,
-        mode=request.mode,
-        weighting=request.weighting,
-        refresh=request.refresh,
-        universe=portfolio_universe(positions),
-        fast=True,
-    )
+    cached = get_cached_strategy()
+    if cached is None:
+        start_precompute(force=False)
+        raise HTTPException(status_code=202, detail="完整 S&P 500 策略正在后台计算，请稍后再试。")
+    strategy = scale_cached_strategy(cached, target_budget)
     currency = (account.get("info") or {}).get("currencyCode") or "GBP"
     return {
         "strategy": strategy,
@@ -108,15 +116,11 @@ def api_rebalance_manual(request: ManualRebalanceRequest) -> dict:
     target_budget = portfolio_target_budget(positions, None, request.budget_gbp)
     if target_budget <= 0:
         raise HTTPException(status_code=400, detail="请先同步/录入持仓，或填写大于 0 的追加资金。")
-    strategy = run_strategy(
-        budget_gbp=target_budget,
-        n=request.n,
-        mode=request.mode,
-        weighting=request.weighting,
-        refresh=request.refresh,
-        universe=portfolio_universe(positions),
-        fast=True,
-    )
+    cached = get_cached_strategy()
+    if cached is None:
+        start_precompute(force=False)
+        raise HTTPException(status_code=202, detail="完整 S&P 500 策略正在后台计算，请稍后再试。")
+    strategy = scale_cached_strategy(cached, target_budget)
     return {
         "strategy": strategy,
         "rebalance": rebalance_from_positions(strategy, positions, "GBP"),
