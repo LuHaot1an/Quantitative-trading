@@ -17,7 +17,7 @@ services:
       - key: TRADING212_API_SECRET
         sync: false
       - key: FRONTEND_ORIGINS
-        value: http://localhost:5173,https://quant-trading-dashboard.onrender.com
+        value: http://localhost:5173,https://quant-trading-dashboard-efla.onrender.com
 
   - type: web
     name: quant-trading-dashboard
@@ -26,4 +26,4 @@ services:
     staticPublishPath: frontend/dist
     envVars:
       - key: VITE_API_BASE_URL
-        value: https://quant-trading-api.onrender.com
+        value: https://quant-trading-api-8dbg.onrender.com
