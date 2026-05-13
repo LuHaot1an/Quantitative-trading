@@ -20,10 +20,8 @@ services:
   - type: web
     name: quant-trading-dashboard
     runtime: static
-    plan: free
     buildCommand: cd frontend && npm install && npm run build
     staticPublishPath: frontend/dist
     envVars:
       - key: VITE_API_BASE_URL
         value: https://quant-trading-api.onrender.com
-
