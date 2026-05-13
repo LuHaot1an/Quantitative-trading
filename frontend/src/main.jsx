@@ -1,0 +1,447 @@
+import React, { useEffect, useMemo, useState } from "react";
+import { createRoot } from "react-dom/client";
+import {
+  AlertTriangle,
+  BarChart3,
+  CheckCircle2,
+  Database,
+  LineChart,
+  Lock,
+  RefreshCw,
+  ShieldCheck,
+  Wallet,
+} from "lucide-react";
+import {
+  Area,
+  AreaChart,
+  Bar,
+  BarChart,
+  CartesianGrid,
+  Cell,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
+import "./styles.css";
+
+const API_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
+
+const defaultSettings = {
+  budget_gbp: 500,
+  n: 5,
+  mode: "aggressive",
+  weighting: "inv_vol",
+  refresh: false,
+};
+
+const COLORS = ["#2563eb", "#16a34a", "#dc2626", "#ca8a04", "#0891b2", "#7c3aed", "#be123c"];
+
+function formatMoney(value, currency = "GBP") {
+  if (value === null || value === undefined || Number.isNaN(Number(value))) return "-";
+  return new Intl.NumberFormat("en-GB", { style: "currency", currency, maximumFractionDigits: 2 }).format(value);
+}
+
+function formatPercent(value) {
+  if (value === null || value === undefined || Number.isNaN(Number(value))) return "-";
+  return `${(value * 100).toFixed(1)}%`;
+}
+
+async function api(path, options = {}) {
+  const response = await fetch(`${API_BASE}${path}`, {
+    headers: { "Content-Type": "application/json" },
+    ...options,
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(data.detail || "请求失败");
+  }
+  return data;
+}
+
+function App() {
+  const [settings, setSettings] = useState(defaultSettings);
+  const [strategy, setStrategy] = useState(null);
+  const [backtest, setBacktest] = useState(null);
+  const [brokerStatus, setBrokerStatus] = useState(null);
+  const [account, setAccount] = useState(null);
+  const [positions, setPositions] = useState([]);
+  const [rebalance, setRebalance] = useState(null);
+  const [manualRows, setManualRows] = useState([{ ticker: "AAPL", quantity: 0, current_price: 0 }]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    refreshBrokerStatus();
+    runDashboard(defaultSettings);
+  }, []);
+
+  async function refreshBrokerStatus() {
+    try {
+      setBrokerStatus(await api("/api/broker/trading212/status"));
+    } catch (err) {
+      setBrokerStatus({ configured: false, message: err.message, can_trade: false });
+    }
+  }
+
+  async function runDashboard(nextSettings = settings) {
+    setLoading(true);
+    setError("");
+    try {
+      const payload = JSON.stringify(nextSettings);
+      const [strategyData, backtestData] = await Promise.all([
+        api("/api/strategy/run", { method: "POST", body: payload }),
+        api("/api/backtest", { method: "POST", body: JSON.stringify(nextSettings) }),
+      ]);
+      setStrategy(strategyData);
+      setBacktest(backtestData);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function syncLivePortfolio() {
+    setLoading(true);
+    setError("");
+    try {
+      const [accountData, positionData, rebalanceData] = await Promise.all([
+        api("/api/broker/trading212/account"),
+        api("/api/broker/trading212/positions"),
+        api("/api/portfolio/rebalance/live", { method: "POST", body: JSON.stringify(settings) }),
+      ]);
+      setAccount(accountData);
+      setPositions(positionData);
+      setRebalance(rebalanceData.rebalance);
+      setStrategy(rebalanceData.strategy);
+    } catch (err) {
+      setError(`${err.message} 可使用下方手动录入。`);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function runManualRebalance() {
+    setLoading(true);
+    setError("");
+    try {
+      const cleanPositions = manualRows
+        .filter((row) => row.ticker.trim())
+        .map((row) => ({
+          ticker: row.ticker.trim().toUpperCase(),
+          quantity: Number(row.quantity) || 0,
+          current_price: Number(row.current_price) || 0,
+        }));
+      const result = await api("/api/portfolio/rebalance/manual", {
+        method: "POST",
+        body: JSON.stringify({ ...settings, positions: cleanPositions }),
+      });
+      setRebalance(result.rebalance);
+      setStrategy(result.strategy);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  const allocationData = useMemo(
+    () =>
+      (strategy?.holdings || []).map((item) => ({
+        name: item.ticker,
+        weight: Number((item.weight * 100).toFixed(1)),
+        value: item.target_value_gbp,
+      })),
+    [strategy],
+  );
+
+  return (
+    <main className="app-shell">
+      <section className="topbar">
+        <div>
+          <p className="eyebrow">Trading 212 Live Read Only</p>
+          <h1>量化投资调仓看板</h1>
+        </div>
+        <div className="security-strip">
+          <span><Lock size={16} /> API 密钥只在后端环境变量</span>
+          <span><ShieldCheck size={16} /> 不提供自动交易入口</span>
+        </div>
+      </section>
+
+      <section className="status-band">
+        <StatusCard icon={<Database />} label="数据日期" value={strategy?.as_of || "-"} />
+        <StatusCard icon={<Wallet />} label="预算" value={formatMoney(settings.budget_gbp)} />
+        <StatusCard icon={<LineChart />} label="策略模式" value={settings.mode === "aggressive" ? "激进动量" : "均衡质量"} />
+        <StatusCard icon={<CheckCircle2 />} label="Trading 212" value={brokerStatus?.configured ? "已配置只读" : "未配置"} />
+      </section>
+
+      <section className="workbench">
+        <aside className="control-panel">
+          <h2>策略设置</h2>
+          <label>
+            预算 GBP
+            <input
+              type="number"
+              min="1"
+              value={settings.budget_gbp}
+              onChange={(event) => setSettings({ ...settings, budget_gbp: Number(event.target.value) })}
+            />
+          </label>
+          <label>
+            持仓数量
+            <input
+              type="number"
+              min="2"
+              max="20"
+              value={settings.n}
+              onChange={(event) => setSettings({ ...settings, n: Number(event.target.value) })}
+            />
+          </label>
+          <label>
+            策略
+            <select value={settings.mode} onChange={(event) => setSettings({ ...settings, mode: event.target.value })}>
+              <option value="aggressive">激进动量</option>
+              <option value="balanced">均衡质量</option>
+            </select>
+          </label>
+          <label>
+            权重
+            <select value={settings.weighting} onChange={(event) => setSettings({ ...settings, weighting: event.target.value })}>
+              <option value="inv_vol">反向波动</option>
+              <option value="hrp">HRP 风险平价</option>
+              <option value="equal">等权</option>
+              <option value="max_sharpe">最大 Sharpe</option>
+            </select>
+          </label>
+          <button className="primary" onClick={() => runDashboard()} disabled={loading}>
+            <RefreshCw size={17} /> 重新计算策略
+          </button>
+          <button className="secondary" onClick={syncLivePortfolio} disabled={loading || !brokerStatus?.configured}>
+            <Wallet size={17} /> 同步 Trading 212 持仓
+          </button>
+          <p className="muted">{brokerStatus?.message || "正在检测 Trading 212 配置。"}</p>
+        </aside>
+
+        <section className="main-grid">
+          {error && <div className="alert"><AlertTriangle size={18} /> {error}</div>}
+          {strategy && (
+            <>
+              <section className="panel">
+                <div className="panel-heading">
+                  <div>
+                    <p className="eyebrow">Target Allocation</p>
+                    <h2>今日建议仓位</h2>
+                  </div>
+                  <span className="pill">只读建议</span>
+                </div>
+                <div className="split">
+                  <div className="chart-box">
+                    <ResponsiveContainer width="100%" height={260}>
+                      <BarChart data={allocationData}>
+                        <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                        <XAxis dataKey="name" />
+                        <YAxis />
+                        <Tooltip formatter={(value) => `${value}%`} />
+                        <Bar dataKey="weight" radius={[5, 5, 0, 0]}>
+                          {allocationData.map((entry, index) => (
+                            <Cell key={entry.name} fill={COLORS[index % COLORS.length]} />
+                          ))}
+                        </Bar>
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                  <div className="metric-stack">
+                    <Metric label="换汇后资金" value={formatMoney(strategy.gbp_after_fx)} />
+                    <Metric label="GBP/USD" value={Number(strategy.fx_rate_gbpusd).toFixed(4)} />
+                    <Metric label="换汇费估计" value={formatMoney(strategy.fx_fee_gbp)} />
+                  </div>
+                </div>
+                <HoldingsTable holdings={strategy.holdings} />
+              </section>
+
+              <section className="panel">
+                <div className="panel-heading">
+                  <div>
+                    <p className="eyebrow">Backtest</p>
+                    <h2>历史表现和风险</h2>
+                  </div>
+                  <BarChart3 size={22} />
+                </div>
+                <RiskMetrics backtest={backtest} />
+                <div className="chart-box">
+                  <ResponsiveContainer width="100%" height={260}>
+                    <AreaChart data={backtest?.series || []}>
+                      <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                      <XAxis dataKey="date" minTickGap={28} />
+                      <YAxis />
+                      <Tooltip formatter={(value) => Number(value).toFixed(2)} />
+                      <Area type="monotone" dataKey="strategy" stroke="#2563eb" fill="#dbeafe" name="策略" />
+                      <Area type="monotone" dataKey="spy" stroke="#16a34a" fill="#dcfce7" name="SPY" />
+                    </AreaChart>
+                  </ResponsiveContainer>
+                </div>
+                <ul className="warnings">
+                  {(strategy.warnings || []).map((warning) => <li key={warning}>{warning}</li>)}
+                </ul>
+              </section>
+            </>
+          )}
+
+          <section className="panel">
+            <div className="panel-heading">
+              <div>
+                <p className="eyebrow">Portfolio</p>
+                <h2>我的持仓和调仓差额</h2>
+              </div>
+              <span className="pill">Live 只读模式</span>
+            </div>
+            <AccountSummary account={account} positions={positions} />
+            <ManualInput rows={manualRows} setRows={setManualRows} onRun={runManualRebalance} loading={loading} />
+            <RebalanceTable rebalance={rebalance} />
+          </section>
+        </section>
+      </section>
+    </main>
+  );
+}
+
+function StatusCard({ icon, label, value }) {
+  return (
+    <div className="status-card">
+      {icon}
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </div>
+  );
+}
+
+function Metric({ label, value }) {
+  return (
+    <div className="metric">
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </div>
+  );
+}
+
+function HoldingsTable({ holdings }) {
+  return (
+    <div className="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>股票</th>
+            <th>行业</th>
+            <th>仓位</th>
+            <th>买入金额</th>
+            <th>股数</th>
+            <th>原因</th>
+          </tr>
+        </thead>
+        <tbody>
+          {holdings.map((item) => (
+            <tr key={item.ticker}>
+              <td><strong>{item.ticker}</strong></td>
+              <td>{item.sector}</td>
+              <td>{formatPercent(item.weight)}</td>
+              <td>{formatMoney(item.target_value_gbp)}</td>
+              <td>{item.shares}</td>
+              <td>{item.explanation}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function RiskMetrics({ backtest }) {
+  const metrics = backtest?.metrics?.strategy || {};
+  const sharpe = metrics.sharpe;
+  return (
+    <div className="metric-row">
+      <Metric label="年化收益" value={formatPercent(metrics.annual_return)} />
+      <Metric label="年化波动" value={formatPercent(metrics.annual_volatility)} />
+      <Metric label="Sharpe" value={sharpe === null || sharpe === undefined ? "-" : sharpe.toFixed(2)} />
+      <Metric label="最大回撤" value={formatPercent(metrics.max_drawdown)} />
+    </div>
+  );
+}
+
+function AccountSummary({ account, positions }) {
+  const cash = account?.cash || {};
+  const currency = cash.currencyCode || account?.info?.currencyCode || "GBP";
+  const freeCash = cash.free ?? cash.available ?? cash.cash;
+  return (
+    <div className="account-grid">
+      <Metric label="账户币种" value={currency || "-"} />
+      <Metric label="可用现金" value={freeCash === null || freeCash === undefined ? "-" : formatMoney(freeCash, currency)} />
+      <Metric label="持仓数量" value={positions.length || "-"} />
+    </div>
+  );
+}
+
+function ManualInput({ rows, setRows, onRun, loading }) {
+  function update(index, key, value) {
+    setRows(rows.map((row, rowIndex) => (rowIndex === index ? { ...row, [key]: value } : row)));
+  }
+
+  return (
+    <div className="manual-box">
+      <div className="manual-heading">
+        <h3>手动录入备用</h3>
+        <button className="ghost" onClick={() => setRows([...rows, { ticker: "", quantity: 0, current_price: 0 }])}>添加一行</button>
+      </div>
+      {rows.map((row, index) => (
+        <div className="manual-row" key={`${index}-${row.ticker}`}>
+          <input placeholder="Ticker" value={row.ticker} onChange={(event) => update(index, "ticker", event.target.value)} />
+          <input type="number" placeholder="股数" value={row.quantity} onChange={(event) => update(index, "quantity", event.target.value)} />
+          <input type="number" placeholder="现价" value={row.current_price} onChange={(event) => update(index, "current_price", event.target.value)} />
+        </div>
+      ))}
+      <button className="secondary" onClick={onRun} disabled={loading}>用手动持仓计算调仓</button>
+    </div>
+  );
+}
+
+function RebalanceTable({ rebalance }) {
+  if (!rebalance) {
+    return <p className="muted">同步 Trading 212 或手动录入后，这里会显示需要买入、卖出或保持的金额。</p>;
+  }
+  return (
+    <div className="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>股票</th>
+            <th>动作</th>
+            <th>当前金额</th>
+            <th>目标金额</th>
+            <th>差额</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rebalance.rows.map((row) => (
+            <tr key={row.ticker}>
+              <td><strong>{row.ticker}</strong></td>
+              <td><span className={`action ${row.action}`}>{actionText(row.action)}</span></td>
+              <td>{formatMoney(row.current_value)}</td>
+              <td>{formatMoney(row.target_value)}</td>
+              <td>{formatMoney(row.difference)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <p className="muted">{rebalance.note}</p>
+    </div>
+  );
+}
+
+function actionText(action) {
+  if (action === "buy") return "买入";
+  if (action === "sell") return "卖出";
+  return "保持";
+}
+
+createRoot(document.getElementById("root")).render(<App />);
