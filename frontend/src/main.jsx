@@ -90,12 +90,9 @@ function App() {
     setError("");
     try {
       const payload = JSON.stringify(nextSettings);
-      const [strategyData, backtestData] = await Promise.all([
-        api("/api/strategy/run", { method: "POST", body: payload }),
-        api("/api/backtest", { method: "POST", body: JSON.stringify(nextSettings) }),
-      ]);
+      const strategyData = await api("/api/strategy/run", { method: "POST", body: payload });
       setStrategy(strategyData);
-      setBacktest(backtestData);
+      setBacktest(null);
     } catch (err) {
       setError(err.message);
     } finally {
@@ -106,18 +103,22 @@ function App() {
 
   async function syncLivePortfolio() {
     setLoading(true);
-    setLoadingLabel("正在同步 Trading 212 持仓。");
+    setLoadingLabel("正在同步 Trading 212 持仓，只读取账户和持仓，不会交易。");
     setError("");
     try {
-      const [accountData, positionData, rebalanceData] = await Promise.all([
+      const [accountData, positionData] = await Promise.all([
         api("/api/broker/trading212/account"),
         api("/api/broker/trading212/positions"),
-        api("/api/portfolio/rebalance/live", { method: "POST", body: JSON.stringify(settings) }),
       ]);
       setAccount(accountData);
       setPositions(positionData);
-      setRebalance(rebalanceData.rebalance);
-      setStrategy(rebalanceData.strategy);
+      if (strategy) {
+        const rebalanceData = await api("/api/portfolio/rebalance/manual", {
+          method: "POST",
+          body: JSON.stringify({ ...settings, positions: positionData }),
+        });
+        setRebalance(rebalanceData.rebalance);
+      }
     } catch (err) {
       setError(`${err.message} 可使用下方手动录入。`);
     } finally {
@@ -304,6 +305,7 @@ function App() {
               <span className="pill">Live 只读模式</span>
             </div>
             <AccountSummary account={account} positions={positions} />
+            <PositionsTable positions={positions} />
             <ManualInput rows={manualRows} setRows={setManualRows} onRun={runManualRebalance} loading={loading} />
             <RebalanceTable rebalance={rebalance} />
           </section>
@@ -385,6 +387,36 @@ function AccountSummary({ account, positions }) {
       <Metric label="账户币种" value={currency || "-"} />
       <Metric label="可用现金" value={freeCash === null || freeCash === undefined ? "-" : formatMoney(freeCash, currency)} />
       <Metric label="持仓数量" value={positions.length || "-"} />
+    </div>
+  );
+}
+
+function PositionsTable({ positions }) {
+  if (!positions.length) {
+    return <p className="muted">点击“同步 Trading 212 持仓”后，这里会先显示你的真实账户持仓。</p>;
+  }
+  return (
+    <div className="table-wrap compact-table">
+      <table>
+        <thead>
+          <tr>
+            <th>真实持仓</th>
+            <th>数量</th>
+            <th>现价</th>
+            <th>盈亏</th>
+          </tr>
+        </thead>
+        <tbody>
+          {positions.map((item, index) => (
+            <tr key={`${item.ticker || item.shortName || index}`}>
+              <td><strong>{item.ticker || item.shortName || "-"}</strong></td>
+              <td>{item.quantity ?? "-"}</td>
+              <td>{item.currentPrice ?? item.averagePrice ?? "-"}</td>
+              <td>{item.ppl ?? "-"}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }
