@@ -8,6 +8,8 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.9
+      - key: APP_PASSWORD
+        sync: false
       - key: TRADING212_BASE_URL
         value: https://live.trading212.com/api/v0
       - key: TRADING212_API_KEY

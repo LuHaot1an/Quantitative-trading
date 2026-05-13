@@ -13,6 +13,7 @@
 - Trading 212 密钥只放后端环境变量。
 - 前端不会保存或显示 API Key/API Secret。
 - 不实现、不暴露 Trading 212 下单、改单、撤单接口。
+- 后端支持 `APP_PASSWORD` 访问密码；生产部署必须设置，避免任何拿到链接的人读取账户数据。
 - 结果是投资辅助信息，不保证盈利。
 
 ## 本地运行
@@ -40,6 +41,7 @@ VITE_API_BASE_URL=http://localhost:8000 npm run dev
 TRADING212_BASE_URL=https://live.trading212.com/api/v0
 TRADING212_API_KEY=你的 Trading 212 API Key
 TRADING212_API_SECRET=你的 Trading 212 API Secret
+APP_PASSWORD=你自己的访问密码
 FRONTEND_ORIGINS=https://你的前端域名.onrender.com
 ```
 

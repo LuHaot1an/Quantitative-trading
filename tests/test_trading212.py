@@ -74,3 +74,12 @@ def test_api_does_not_expose_order_routes():
     assert not any("/orders" in path for path in paths)
     assert api.get("/api/broker/trading212/status").status_code == 200
 
+
+def test_app_password_rejects_wrong_password(monkeypatch):
+    monkeypatch.setattr("backend.app.main.APP_PASSWORD", "correct-password")
+    api = TestClient(app)
+
+    response = api.get("/api/broker/trading212/status", headers={"X-App-Password": "wrong"})
+
+    assert response.status_code == 401
+    assert "correct-password" not in response.text

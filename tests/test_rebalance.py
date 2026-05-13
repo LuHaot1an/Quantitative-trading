@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from backend.app.strategy import rebalance_from_positions
+from backend.app.main import portfolio_target_budget
 
 
 def test_rebalance_marks_buy_sell_hold_and_extra_position():
@@ -28,3 +29,12 @@ def test_rebalance_marks_buy_sell_hold_and_extra_position():
     assert result["cash_needed_if_only_buying"] == 400.0
     assert result["cash_released_by_sells"] == 250.0
 
+
+def test_portfolio_target_budget_includes_current_positions_cash_and_new_cash():
+    positions = [
+        {"ticker": "AAPL_US_EQ", "quantity": 2, "currentPrice": 100.0},
+        {"ticker": "MSFT_US_EQ", "marketValue": 50.0},
+    ]
+    account = {"cash": {"free": 25.0}}
+
+    assert portfolio_target_budget(positions, account, additional_cash_gbp=75.0) == 350.0
