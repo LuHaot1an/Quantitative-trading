@@ -69,11 +69,11 @@ function App() {
   const [rebalance, setRebalance] = useState(null);
   const [manualRows, setManualRows] = useState([{ ticker: "AAPL", quantity: 0, current_price: 0 }]);
   const [loading, setLoading] = useState(false);
+  const [loadingLabel, setLoadingLabel] = useState("");
   const [error, setError] = useState("");
 
   useEffect(() => {
     refreshBrokerStatus();
-    runDashboard(defaultSettings);
   }, []);
 
   async function refreshBrokerStatus() {
@@ -86,6 +86,7 @@ function App() {
 
   async function runDashboard(nextSettings = settings) {
     setLoading(true);
+    setLoadingLabel("正在计算策略，第一次运行可能需要 1-3 分钟。");
     setError("");
     try {
       const payload = JSON.stringify(nextSettings);
@@ -99,11 +100,13 @@ function App() {
       setError(err.message);
     } finally {
       setLoading(false);
+      setLoadingLabel("");
     }
   }
 
   async function syncLivePortfolio() {
     setLoading(true);
+    setLoadingLabel("正在同步 Trading 212 持仓。");
     setError("");
     try {
       const [accountData, positionData, rebalanceData] = await Promise.all([
@@ -119,11 +122,13 @@ function App() {
       setError(`${err.message} 可使用下方手动录入。`);
     } finally {
       setLoading(false);
+      setLoadingLabel("");
     }
   }
 
   async function runManualRebalance() {
     setLoading(true);
+    setLoadingLabel("正在用手动持仓计算调仓。");
     setError("");
     try {
       const cleanPositions = manualRows
@@ -143,6 +148,7 @@ function App() {
       setError(err.message);
     } finally {
       setLoading(false);
+      setLoadingLabel("");
     }
   }
 
@@ -225,6 +231,7 @@ function App() {
 
         <section className="main-grid">
           {error && <div className="alert"><AlertTriangle size={18} /> {error}</div>}
+          {loadingLabel && <div className="notice"><RefreshCw size={18} /> {loadingLabel}</div>}
           {strategy && (
             <>
               <section className="panel">
